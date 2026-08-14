@@ -36,28 +36,37 @@ class JobResult:
 
 def run(params: dict[str, str], envelope: str, deps: JobDeps) -> JobResult:
     started_at = deps.now()
-    req = from_params(params)
     secrets: list[str] = []
     target: TargetPath | None = None
     row_count: int | None = None
+    audited = False
+    notified = False
 
     def finish(status: Status, hint: str = "") -> JobResult:
+        nonlocal audited, notified
         finished_at = deps.now()
         hint = hint or messages.HINTS.get(status, "")
-        row = audit.build_row(req, target, status, row_count, started_at,
-                              finished_at, scrub(hint, secrets))
+        req_for_audit = from_params(params)  # re-create for audit
+        row = audit.build_row(req_for_audit, target, status, row_count,
+                              started_at, finished_at, scrub(hint, secrets))
         deps.executor.execute(audit.build_ensure_table(deps.audit_table))
-        deps.executor.execute(audit.build_insert(row, deps.audit_table))
+        if not audited:
+            deps.executor.execute(audit.build_insert(row, deps.audit_table))
+            audited = True
         if status is Status.SUCCEEDED:
-            subject, body = compose_success(req, target, row_count)
+            subject, body = compose_success(req_for_audit, target, row_count)
         else:
-            subject, body = compose_failure(req, status, scrub(hint, secrets))
-        deps.notifier.send(req.requester, scrub(subject, secrets),
-                           scrub(body, secrets))
+            subject, body = compose_failure(req_for_audit, status,
+                                           scrub(hint, secrets))
+        if not notified:
+            deps.notifier.send(req_for_audit.requester, scrub(subject, secrets),
+                               scrub(body, secrets))
+            notified = True
         return JobResult(status, target.display if target else None, row_count)
 
     try:
         try:
+            req = from_params(params)
             validate(req)
         except RequestError as exc:
             return finish(Status.POLICY_REJECTED, str(exc))
@@ -100,6 +109,11 @@ def run(params: dict[str, str], envelope: str, deps: JobDeps) -> JobResult:
     except ConnectorError as exc:
         return finish(exc.status, scrub(str(exc), secrets))
     except Exception as exc:  # noqa: BLE001 - job must always audit+notify
-        return finish(Status.DRIVER_ERROR,
-                      messages.HINTS[Status.DRIVER_ERROR]
-                      + " Detail: " + scrub(str(exc), secrets))
+        try:
+            return finish(Status.DRIVER_ERROR,
+                          messages.HINTS[Status.DRIVER_ERROR]
+                          + " Detail: " + scrub(str(exc), secrets))
+        except Exception:  # noqa: BLE001
+            # If finish() itself fails, swallow and return with DRIVER_ERROR
+            return JobResult(Status.DRIVER_ERROR,
+                           target.display if target else None, row_count)

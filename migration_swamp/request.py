@@ -54,12 +54,12 @@ def to_params(req: AcquisitionRequest) -> dict[str, str]:
 
 def from_params(d: dict[str, str]) -> AcquisitionRequest:
     return AcquisitionRequest(
-        request_id=d["request_id"],
-        requester=d["requester"],
-        source_system=d["source_system"],
-        schema=d["schema"],
-        table=d["table"],
-        dbhost=d["dbhost"] or None,
-        gain_access=d["gain_access"] == "true",
-        refresh=d["refresh"] == "true",
+        request_id=d.get("request_id", ""),
+        requester=d.get("requester", ""),
+        source_system=d.get("source_system", ""),
+        schema=d.get("schema", ""),
+        table=d.get("table", ""),
+        dbhost=d.get("dbhost", "") or None,
+        gain_access=d.get("gain_access", "false") == "true",
+        refresh=d.get("refresh", "false") == "true",
     )

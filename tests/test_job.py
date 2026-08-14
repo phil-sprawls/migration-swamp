@@ -1,5 +1,3 @@
-import pytest
-
 from migration_swamp.connectors.base import ConnectorError, ProbeResult
 from migration_swamp.crypto import Credentials, encrypt_credentials, generate_keypair
 from migration_swamp.job import JobDeps, run
@@ -130,3 +128,28 @@ def test_probe_uses_decrypted_user_creds():
     deps, conn, _, _ = make_deps()
     run(make_params(), envelope(), deps)
     assert conn.probed_with[0][1] == CREDS
+
+
+def test_malformed_params_policy_rejected():
+    """Missing params key should result in POLICY_REJECTED with one audit row."""
+    params = make_params()
+    del params["table"]  # Remove required field
+    deps, _, ex, notif = make_deps()
+    result = run(params, envelope(), deps)
+    assert result.status is Status.POLICY_REJECTED
+    assert len(audit_inserts(ex)) == 1
+    assert len(notif.sent) == 1
+
+
+def test_notifier_failure_writes_single_audit_row():
+    """Notifier failure on success path should result in DRIVER_ERROR with one audit."""
+    class RaisingNotifier:
+        def send(self, to, subject, body):
+            raise RuntimeError("notifier is down")
+
+    deps, _, ex, _ = make_deps()
+    deps.notifier = RaisingNotifier()
+    result = run(make_params(), envelope(), deps)
+    assert result.status is Status.DRIVER_ERROR
+    assert len(audit_inserts(ex)) == 1
+    # run() should not raise despite notifier failure
