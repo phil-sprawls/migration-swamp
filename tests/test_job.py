@@ -153,3 +153,19 @@ def test_notifier_failure_writes_single_audit_row():
     assert result.status is Status.DRIVER_ERROR
     assert len(audit_inserts(ex)) == 1
     # run() should not raise despite notifier failure
+
+
+def test_connector_error_with_failing_notifier_single_audit_row():
+    """ConnectorError with failing notifier should write single audit and not raise."""
+    class RaisingNotifier:
+        def send(self, to, subject, body):
+            raise RuntimeError("notifier is down")
+
+    conn = FakeConnector(read_error=ConnectorError(
+        Status.VOLUME_EXCEEDED, "too big"))
+    deps, _, ex, _ = make_deps(connector=conn)
+    deps.notifier = RaisingNotifier()
+    result = run(make_params(), envelope(), deps)
+    assert result.status is Status.DRIVER_ERROR
+    assert len(audit_inserts(ex)) == 1
+    # run() should not raise despite connector error + notifier failure

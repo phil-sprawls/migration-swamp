@@ -107,7 +107,12 @@ def run(params: dict[str, str], envelope: str, deps: JobDeps) -> JobResult:
         return finish(Status.SUCCEEDED)
 
     except ConnectorError as exc:
-        return finish(exc.status, scrub(str(exc), secrets))
+        try:
+            return finish(exc.status, scrub(str(exc), secrets))
+        except Exception:  # noqa: BLE001
+            # If finish() itself fails, swallow and return with DRIVER_ERROR
+            return JobResult(Status.DRIVER_ERROR,
+                           target.display if target else None, row_count)
     except Exception as exc:  # noqa: BLE001 - job must always audit+notify
         try:
             return finish(Status.DRIVER_ERROR,
