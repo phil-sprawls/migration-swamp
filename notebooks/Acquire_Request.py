@@ -66,8 +66,16 @@ print(messages.probe_ok(display_name))
 # Step 4 of 4 — submit the gated acquisition job (fire and forget).
 from databricks.sdk import WorkspaceClient  # DBR built-in
 
+from migration_swamp.executor import SparkExecutor
+
 envelope = encrypt_credentials(creds, load_public_key())
 del creds  # nothing sensitive stays in notebook state
+
+# Mirror job.py's decision matrix so the notebook narrates correctly:
+# copy missing or refresh selected -> a pull will run; otherwise grant-only.
+target = target_path(req.source_system, req.schema, req.table)
+exists = SparkExecutor(spark).table_exists(target)
+need_pull = (not exists) or req.refresh
 
 w = WorkspaceClient()
 job = next(w.jobs.list(name=JOB_NAME))
@@ -76,4 +84,7 @@ run = w.jobs.run_now(
     job_parameters={**to_params(req), "envelope": envelope},
 )
 print(f"Submitted request {req.request_id} (run {run.run_id}).")
-print(messages.COPY_STARTED)
+if need_pull:
+    print(messages.COPY_STARTED)
+else:
+    print(messages.access_only_submitted(display_name))
