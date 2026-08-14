@@ -9,14 +9,14 @@
 import uuid
 
 from migration_swamp import messages
-from migration_swamp.config import JOB_NAME, SOURCES, load_public_key
+from migration_swamp.config import AUDIT_TABLE, JOB_NAME, SOURCES, load_public_key
 from migration_swamp.connectors.base import Asset
 from migration_swamp.connectors.factory import make_connector
 from migration_swamp.crypto import encrypt_credentials
 from migration_swamp.interactive_auth import prompt_credentials
 from migration_swamp.naming import target_path
 from migration_swamp.request import (
-    AcquisitionRequest, RequestError, to_params, validate,
+    AcquisitionRequest, RequestError, canonical_aad, to_params, validate,
 )
 
 print(messages.WELCOME)
@@ -66,15 +66,20 @@ print(messages.probe_ok(display_name))
 # Step 4 of 4 — submit the gated acquisition job (fire and forget).
 from databricks.sdk import WorkspaceClient  # DBR built-in
 
-from migration_swamp.executor import SparkExecutor
-
-envelope = encrypt_credentials(creds, load_public_key())
+envelope = encrypt_credentials(creds, load_public_key(), canonical_aad(req))
 del creds  # nothing sensitive stays in notebook state
 
 # Mirror job.py's decision matrix so the notebook narrates correctly:
 # copy missing or refresh selected -> a pull will run; otherwise grant-only.
-target = target_path(req.source_system, req.schema, req.table)
-exists = SparkExecutor(spark).table_exists(target)
+# This existence check is advisory only — it only selects the closing
+# message shown here. It queries the audit log (readable by design) rather
+# than the target table itself, since users are not granted SELECT on
+# target tables until the gated job runs. The gated job remains the
+# authoritative source of truth for what actually happens.
+exists = spark.sql(
+    f"SELECT 1 FROM {AUDIT_TABLE} WHERE target_table = '{display_name}' "
+    f"AND status = 'SUCCEEDED' LIMIT 1"
+).count() > 0
 need_pull = (not exists) or req.refresh
 
 w = WorkspaceClient()

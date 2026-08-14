@@ -39,3 +39,12 @@ imported — it only runs on the work cluster.
    patterns; confirm the SAS volume guardrail value.
 6. Verify end-to-end on one known table per source, then check the
    audit row, tags, and grant from the serverless warehouse.
+7. Audit rows are per-run-attempt, not per request: a retried run writes
+   another row for the same `request_id`. Dedupe by `request_id` downstream
+   (keep latest `finished_at`) or disable job retries on
+   `migration-swamp-acquire`.
+8. The job trusts its own parameters — job ACLs are part of the security
+   boundary, not a formality. Grant users CAN_MANAGE_RUN only (no edit) so
+   they cannot alter job logic or override the service-principal identity,
+   and verify that Databricks run-history parameter visibility in this
+   tenant doesn't leak other users' request details across principals.

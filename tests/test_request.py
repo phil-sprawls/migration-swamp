@@ -48,6 +48,18 @@ def test_all_errors_reported_at_once():
     assert "source_system" in msg and "table" in msg and "action" in msg
 
 
+def test_requester_format_validated():
+    with pytest.raises(RequestError, match="requester"):
+        validate(make(requester="evil`user"))
+    with pytest.raises(RequestError, match="requester"):
+        validate(make(requester="has space"))
+
+
+def test_all_symbol_identifier_rejected():
+    with pytest.raises(RequestError, match="schema"):
+        validate(make(schema="$$$"))
+
+
 def test_param_round_trip():
     req = make(refresh=True)
     assert from_params(to_params(req)) == req

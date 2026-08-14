@@ -41,3 +41,11 @@ def test_grant_select():
     sql = build_grant_select(TP, "user@example.com")
     assert sql == ("GRANT SELECT ON TABLE `sql_server`.`prod_db`.`data_table` "
                    "TO `user@example.com`")
+
+
+def test_grant_select_escapes_backticks():
+    sql = build_grant_select(TP, "evil`.`other_schema`.`t` TO `attacker")
+    assert sql == (
+        "GRANT SELECT ON TABLE `sql_server`.`prod_db`.`data_table` "
+        "TO `evil``.``other_schema``.``t`` TO ``attacker`"
+    )

@@ -39,14 +39,14 @@ def generate_keypair() -> tuple[str, str]:
     return private_pem, public_pem
 
 
-def encrypt_credentials(creds: Credentials, public_pem: str) -> str:
+def encrypt_credentials(creds: Credentials, public_pem: str, aad: str) -> str:
     public_key = serialization.load_pem_public_key(public_pem.encode())
     data_key = AESGCM.generate_key(bit_length=256)
     nonce = os.urandom(12)
     plaintext = json.dumps(
         {"username": creds.username, "password": creds.password}
     ).encode()
-    ciphertext = AESGCM(data_key).encrypt(nonce, plaintext, None)
+    ciphertext = AESGCM(data_key).encrypt(nonce, plaintext, aad.encode())
     envelope = {
         "k": base64.b64encode(public_key.encrypt(data_key, _OAEP)).decode(),
         "n": base64.b64encode(nonce).decode(),
@@ -55,7 +55,7 @@ def encrypt_credentials(creds: Credentials, public_pem: str) -> str:
     return base64.b64encode(json.dumps(envelope).encode()).decode()
 
 
-def decrypt_credentials(envelope: str, private_pem: str) -> Credentials:
+def decrypt_credentials(envelope: str, private_pem: str, aad: str) -> Credentials:
     try:
         private_key = serialization.load_pem_private_key(
             private_pem.encode(), password=None
@@ -63,7 +63,7 @@ def decrypt_credentials(envelope: str, private_pem: str) -> Credentials:
         outer = json.loads(base64.b64decode(envelope))
         data_key = private_key.decrypt(base64.b64decode(outer["k"]), _OAEP)
         plaintext = AESGCM(data_key).decrypt(
-            base64.b64decode(outer["n"]), base64.b64decode(outer["c"]), None
+            base64.b64decode(outer["n"]), base64.b64decode(outer["c"]), aad.encode()
         )
         inner = json.loads(plaintext)
         return Credentials(inner["username"], inner["password"])

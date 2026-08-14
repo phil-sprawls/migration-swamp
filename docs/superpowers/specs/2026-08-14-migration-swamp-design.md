@@ -197,7 +197,7 @@ remediation hint. Statuses:
 
 Full-replace writes are idempotent. Concurrent requests for the same asset
 are last-writer-wins in v1 (acceptable: identical full pulls); audit rows are
-deduped by request id.
+per run attempt; consumers dedupe by request id.
 
 ## Testing strategy
 

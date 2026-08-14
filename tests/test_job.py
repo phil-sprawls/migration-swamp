@@ -2,7 +2,7 @@ from migration_swamp.connectors.base import ConnectorError, ProbeResult
 from migration_swamp.crypto import Credentials, encrypt_credentials, generate_keypair
 from migration_swamp.job import JobDeps, run
 from migration_swamp.notify import LoggingNotifier
-from migration_swamp.request import AcquisitionRequest, to_params
+from migration_swamp.request import AcquisitionRequest, canonical_aad, to_params
 from migration_swamp.status import Status
 from tests.fakes import FakeConnector, FakeExecutor
 
@@ -11,13 +11,17 @@ CREDS = Credentials("phil", "hunter2")
 TARGET = "sql_server.prod_db.data_table"
 
 
-def make_params(**kw):
+def _base_kwargs(**kw):
     base = dict(request_id="r1", requester="user@example.com",
                 source_system="sql_server", schema="prod_db",
                 table="data_table", dbhost="sqlhost01",
                 gain_access=True, refresh=False)
     base.update(kw)
-    return to_params(AcquisitionRequest(**base))
+    return base
+
+
+def make_params(**kw):
+    return to_params(AcquisitionRequest(**_base_kwargs(**kw)))
 
 
 def make_deps(connector=None, executor=None):
@@ -30,8 +34,9 @@ def make_deps(connector=None, executor=None):
     return deps, connector, executor, notifier
 
 
-def envelope():
-    return encrypt_credentials(CREDS, PUB)
+def envelope(**kw):
+    req = AcquisitionRequest(**_base_kwargs(**kw))
+    return encrypt_credentials(CREDS, PUB, canonical_aad(req))
 
 
 def audit_inserts(executor):
@@ -64,7 +69,7 @@ def test_exists_access_only_grants_without_pull():
 
 def test_exists_refresh_pulls_again():
     deps, conn, ex, _ = make_deps(executor=FakeExecutor({TARGET}))
-    result = run(make_params(refresh=True), envelope(), deps)
+    result = run(make_params(refresh=True), envelope(refresh=True), deps)
     assert result.status is Status.SUCCEEDED and result.row_count == 42
     assert conn.read_calls
     assert any("CREATE OR REPLACE" in s for s in ex.executed)
@@ -86,6 +91,19 @@ def test_bad_envelope_policy_rejected():
     result = run(make_params(), "not-a-real-envelope", deps)
     assert result.status is Status.POLICY_REJECTED
     assert len(audit_inserts(ex)) == 1
+
+
+def test_swapped_params_rejected():
+    """Envelope bound to request A's params; run() called with request B's
+    params (different table) must fail decryption, not silently reuse A's
+    credentials for B's target."""
+    deps, conn, ex, _ = make_deps()
+    request_a_envelope = envelope(table="data_table")
+    result = run(make_params(table="other_table"), request_a_envelope, deps)
+    assert result.status is Status.POLICY_REJECTED
+    assert not conn.probed_with and not conn.read_calls
+    assert len(audit_inserts(ex)) == 1
+    assert not any(s.startswith("CREATE OR REPLACE") for s in ex.executed)
 
 
 def test_probe_failure_maps_connector_status():
@@ -156,7 +174,8 @@ def test_notifier_failure_writes_single_audit_row():
 
 
 def test_connector_error_with_failing_notifier_single_audit_row():
-    """ConnectorError with failing notifier should write single audit and not raise."""
+    """ConnectorError with failing notifier should write single audit, preserve
+    the connector's own status (not masked as DRIVER_ERROR), and not raise."""
     class RaisingNotifier:
         def send(self, to, subject, body):
             raise RuntimeError("notifier is down")
@@ -166,6 +185,6 @@ def test_connector_error_with_failing_notifier_single_audit_row():
     deps, _, ex, _ = make_deps(connector=conn)
     deps.notifier = RaisingNotifier()
     result = run(make_params(), envelope(), deps)
-    assert result.status is Status.DRIVER_ERROR
+    assert result.status is Status.VOLUME_EXCEEDED
     assert len(audit_inserts(ex)) == 1
     # run() should not raise despite connector error + notifier failure

@@ -9,7 +9,7 @@ from migration_swamp.executor import SqlExecutor
 from migration_swamp.naming import TargetPath, target_path
 from migration_swamp.notify import Notifier, compose_failure, compose_success
 from migration_swamp.request import (
-    AcquisitionRequest, RequestError, from_params, validate,
+    AcquisitionRequest, RequestError, canonical_aad, from_params, validate,
 )
 from migration_swamp.scrub import scrub
 from migration_swamp.status import Status
@@ -49,8 +49,8 @@ def run(params: dict[str, str], envelope: str, deps: JobDeps) -> JobResult:
         req_for_audit = from_params(params)  # re-create for audit
         row = audit.build_row(req_for_audit, target, status, row_count,
                               started_at, finished_at, scrub(hint, secrets))
-        deps.executor.execute(audit.build_ensure_table(deps.audit_table))
         if not audited:
+            deps.executor.execute(audit.build_ensure_table(deps.audit_table))
             deps.executor.execute(audit.build_insert(row, deps.audit_table))
             audited = True
         if status is Status.SUCCEEDED:
@@ -74,7 +74,8 @@ def run(params: dict[str, str], envelope: str, deps: JobDeps) -> JobResult:
         target = target_path(req.source_system, req.schema, req.table)
 
         try:
-            creds = decrypt_credentials(envelope, deps.private_key_pem)
+            aad = canonical_aad(req)
+            creds = decrypt_credentials(envelope, deps.private_key_pem, aad)
         except CryptoError:
             target = None
             return finish(
@@ -110,8 +111,9 @@ def run(params: dict[str, str], envelope: str, deps: JobDeps) -> JobResult:
         try:
             return finish(exc.status, scrub(str(exc), secrets))
         except Exception:  # noqa: BLE001
-            # If finish() itself fails, swallow and return with DRIVER_ERROR
-            return JobResult(Status.DRIVER_ERROR,
+            # If finish() itself fails, swallow and return with the
+            # connector's own status rather than masking it as DRIVER_ERROR
+            return JobResult(exc.status,
                            target.display if target else None, row_count)
     except Exception as exc:  # noqa: BLE001 - job must always audit+notify
         try:

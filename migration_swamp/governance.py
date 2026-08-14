@@ -30,4 +30,5 @@ def build_set_tags(target: TargetPath, req: AcquisitionRequest,
 
 
 def build_grant_select(target: TargetPath, principal: str) -> str:
-    return f"GRANT SELECT ON TABLE {target.fqn} TO `{principal}`"
+    safe_principal = principal.replace("`", "``")
+    return f"GRANT SELECT ON TABLE {target.fqn} TO `{safe_principal}`"
