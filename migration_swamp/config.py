@@ -1,7 +1,9 @@
 """Deployment configuration. Values below are laptop defaults; the work
 hardening pass replaces endpoints, AUDIT_TABLE, and JOB_NAME with
 tenant-approved values."""
+import os
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -20,3 +22,11 @@ SOURCES: dict[str, SourceConfig] = {
 
 AUDIT_TABLE = "swamp_meta.ops.acquisition_log"
 JOB_NAME = "migration-swamp-acquire"
+
+
+def load_public_key() -> str:
+    env = os.environ.get("SWAMP_PUBLIC_KEY_PEM")
+    if env:
+        return env
+    dev_key = Path(__file__).resolve().parent.parent / "keys" / "dev_public.pem"
+    return dev_key.read_text()
