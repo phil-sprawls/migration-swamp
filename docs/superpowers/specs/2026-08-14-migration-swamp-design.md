@@ -40,7 +40,8 @@ built-in libraries.
 │ Probe the exact asset as the user (SELECT … WHERE 1=0 / saspy open).    │
 │ Fail → STOP with a clear message. Pass → envelope-encrypt creds and     │
 │ trigger the gated job with (request params, ciphertext).                │
-│ Then poll the run and narrate progress until completion.                │
+│ If a data copy will run: "Data copy started. You may close this         │
+│ notebook. You will receive an email when the data is ready."            │
 └──────────────────────────────┬──────────────────────────────────────────┘
                                ▼   gate: job runs as service principal
 ┌─ PULL PLANE (gated Databricks job, classic jobs compute) ───────────────┐
@@ -55,6 +56,8 @@ built-in libraries.
 │    (e.g. sql_server.prod_db.data_table), owned by the service principal │
 │ 6. Apply tags (source_system=…, acquisition_type=copy)                  │
 │ 7. GRANT SELECT to requester; write audit row; discard creds            │
+│ 8. Email the requester: success (table ready, path, row count) or       │
+│    failure (classified reason + remediation hint)                       │
 └──────────────────────────────┬──────────────────────────────────────────┘
                                ▼
 ┌─ CONSUMPTION PLANE (pure SQL, serverless SQL warehouse) ────────────────┐
@@ -120,6 +123,9 @@ migration-swamp/
 │   ├── governance.py    # SQL builders: CREATE OR REPLACE TABLE AS,
 │   │                    #   SET TAGS, GRANT SELECT
 │   ├── audit.py         # acquisition_log row construction & write
+│   ├── notify.py        # Notifier interface + email composition; laptop
+│   │                    #   impl logs/SMTP-stubs, work impl uses the
+│   │                    #   approved company email pattern
 │   ├── messages.py      # user-facing step/status/next-step messages shared
 │   │                    #   by notebook and job output
 │   └── job.py           # pull-plane orchestration: validate → decrypt →
@@ -151,13 +157,17 @@ and what comes next:
    a clear success or actionable failure message (flow stops on failure).
 5. **Submit** — "Submitting gated acquisition job (run #…)". Ciphertext-only
    handoff explained in one line.
-6. **Poll & notify** — the notebook polls the run, narrating state changes,
-   and on completion prints: final status, the governed table path, row
-   count, and next steps ("query it on the serverless warehouse",
-   "re-run with Refresh to update"). On failure: the classified reason and
-   remediation hint from acquisition_log.
-   (Optional at work: wire an email notification into the job; v1
-   notification is the notebook itself plus the queryable audit row.)
+6. **Hand off & notify** — fire-and-forget:
+   - If a data copy will run (copy missing or refresh selected), the
+     notebook prints: "Data copy started. You may close this notebook.
+     You will receive an email when the data is ready." The job sends the
+     email on completion — success (table path, row count, how to query on
+     the serverless warehouse) or failure (classified reason + remediation
+     hint). The user does not need to keep the notebook open.
+   - If no copy is needed (grant-only on an existing table), the job is
+     typically fast; the user is told access is being granted and receives
+     the same completion email.
+   - acquisition_log remains queryable for status at any time.
 
 ## Credential handling
 
@@ -202,6 +212,8 @@ All on the laptop, pytest, no Databricks required for the core:
 - `job.py` orchestration end-to-end against fake connectors and a fake SQL
   executor that records every issued statement
 - credential-scrubbing wrapper (no secret material in any raised error)
+- notification composition (success/failure email content) against a fake
+  Notifier
 
 The JDBC/saspy glue is deliberately thin and is hardened at work against the
 approved connection patterns.
