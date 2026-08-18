@@ -23,6 +23,15 @@ SOURCES: dict[str, SourceConfig] = {
 AUDIT_TABLE = "swamp_meta.ops.acquisition_log"
 JOB_NAME = "migration-swamp-acquire"
 
+# SQL Server network preflight. Unlike Oracle and SAS, whose endpoints are
+# enabled tenant-wide, each SQL Server host must be opened to Databricks
+# individually — so a user's first attempt against a new host is the most
+# likely failure in the whole flow. UDAP_INTAKE_URL is where they go to get
+# that path opened; see docs/WHITEPAPER.md.
+UDAP_INTAKE_URL = "go/udapintake"
+DEFAULT_SQLSERVER_PORT = 1433
+PREFLIGHT_TIMEOUT_SECONDS = 5
+
 
 def load_public_key() -> str:
     env = os.environ.get("SWAMP_PUBLIC_KEY_PEM")

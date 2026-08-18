@@ -59,7 +59,10 @@ display_name = target_path(req.source_system, req.schema, req.table).display
 print(messages.probing(display_name))
 probe = make_connector(req, spark).probe(asset, creds)
 if not probe.ok:
-    raise SystemExit(messages.probe_failed(probe.message))
+    # Pass the status so the user gets the actionable hint (for a blocked
+    # SQL Server host, the go/udapintake enablement request) and not just
+    # the raw driver error.
+    raise SystemExit(messages.probe_failed(probe.message, probe.status))
 print(messages.probe_ok(display_name))
 
 # COMMAND ----------
