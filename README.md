@@ -1,4 +1,8 @@
-# migration-swamp — self-service data acquisition for Databricks
+# migration-swamp — governed data acquisition for Databricks
+
+Users already pull on-prem data into Databricks themselves; the copies that
+result are ungovernable. This keeps users enabled and makes governance a
+property of how the copy gets made.
 
 End users prove they can read an on-prem asset (SQL Server, Oracle, SAS)
 and a gated job lands a governed shared copy at

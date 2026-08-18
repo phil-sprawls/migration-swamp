@@ -8,21 +8,44 @@ launch it.
 
 ## 1. The problem
 
-Analysts need on-prem data (SQL Server, Oracle, SAS) in Databricks. Today
-that means filing a ticket and waiting for a platform engineer to hand-write
-a pull. The work is repetitive, the copies land wherever the engineer put
-them, and nobody can answer "where did this table come from?" six months
-later.
+Analysts already pull on-prem data (SQL Server, Oracle, SAS) into Databricks
+themselves. That is not the problem — it is the part that works. Users are
+enabled and moving, and any proposal that slows them down is a regression.
 
-migration-swamp makes it self-service **without** making it ungoverned. An
-analyst describes the asset they need, proves they can already read it on
-the source system, and a gated job lands a governed copy in Unity Catalog —
-named consistently, tagged with its provenance, granted only to them, and
-written to an audit log.
+The problem is that **those copies are ungovernable.** A copy made this way
+lands wherever the person who made it decided to put it, under whatever name
+they chose. Nobody can answer, afterward:
 
-The guiding constraint: **self-service must not become a privilege
-escalation path.** A user must not be able to obtain data through this tool
-that they could not already read at the source.
+- Where did this table come from, and when?
+- Is it a full copy, a filtered extract, or stale by two quarters?
+- Who is entitled to see it, and who granted that?
+- Did the person who pulled it have the right to read the source at all?
+- Where did their source credentials go?
+
+There is no provenance, no consistent naming, no audit trail, and no
+enforced link between a copy and the requester's actual entitlement at the
+source. The volume of these copies grows, and the governance gap grows with
+it.
+
+migration-swamp is the paved road. An analyst describes the asset they need,
+proves they can already read it on the source system, and a gated job lands
+the copy in Unity Catalog — named deterministically, tagged with its
+provenance, granted only to them, and written to an audit log. Governance is
+not a review step the user waits on; it is a property of how the copy gets
+made.
+
+Two constraints govern the design, and they pull against each other:
+
+1. **Users must stay enabled.** Self-service exists today. Replacing it with
+   a ticket queue would not produce governed copies — it would produce
+   workarounds, and the ungoverned copies would continue somewhere less
+   visible. Speed is a governance requirement, not a UX preference.
+2. **Self-service must not become a privilege escalation path.** A user must
+   not be able to obtain data through this tool that they could not already
+   read at the source.
+
+Section 3 covers how the design tries to satisfy both at once. Whether it
+succeeds is the central question for this review.
 
 ---
 
@@ -72,12 +95,24 @@ These are the parts an architecture review should focus on.
 
 ### 3.1 Probe-before-submit is the authorization model
 
-There is no approval queue and no entitlement database. The user's own
-ability to read the asset **at the source, with their own credentials** is
-the authorization. The tool copies data on behalf of someone who could
-already read it, so the copy grants no new access. This is why the probe is
-non-negotiable and why the job re-probes rather than trusting the notebook's
-result.
+There is no approval queue and no entitlement database — deliberately. An
+approval step would satisfy constraint 2 and violate constraint 1, and a
+tool users route around governs nothing.
+
+Instead, the user's own ability to read the asset **at the source, with
+their own credentials** is the authorization. The tool copies data on behalf
+of someone who could already read it, so the copy grants no new access. The
+source system's existing entitlements — already maintained, already audited
+— are reused as the access-control decision rather than re-implemented.
+
+This is why the probe is non-negotiable, and why the job re-probes rather
+than trusting the notebook's result: the probe *is* the authorization, so it
+has to happen inside the trust boundary.
+
+**The reviewer's question here:** the probe proves the user can read the
+asset *at the moment of the copy*. It does not re-check later. If the user's
+source entitlement is revoked afterward, the copy in Unity Catalog and its
+grant both persist. See open question 6.
 
 ### 3.2 Credentials are envelope-encrypted and bound to the request
 
@@ -242,18 +277,40 @@ misreports, the classifier backstop alone still delivers the message.
 
 ## 8. Open questions for the review
 
-1. **Full-table copies only.** No incremental loads, no partitioning, no
+The first two follow directly from §1 and are the ones that decide whether
+this actually closes the governance gap. A paved road only governs the
+traffic that uses it.
+
+1. **Adoption, and the fate of the existing path.** Nothing here prevents a
+   user from continuing to pull data the way they do today. Is the plan to
+   make this attractive enough to win on merit, or to eventually restrict
+   direct source access from Databricks so this becomes the only route? The
+   design assumes the former; the governance case is much stronger under the
+   latter. This is a policy decision, not a code decision, and it should be
+   made before launch rather than after.
+2. **The existing ungoverned copies.** This tool governs copies made *from
+   now on*. It does nothing about the copies already sitting in the
+   workspace, which are the current governance gap. Is there a plan to
+   inventory them, re-acquire the ones that matter through this flow, and
+   retire the rest? Re-acquisition is the cheap path — the same user runs
+   the same request and gets a tagged, audited, correctly-named copy.
+3. **Full-table copies only.** No incremental loads, no partitioning, no
    predicate pushdown. Is that acceptable for the expected table sizes, and
    should SQL Server and Oracle get a volume guardrail like SAS has?
-2. **No cost ceiling.** A user can trigger a large pull unattended. Should
+4. **No cost ceiling.** A user can trigger a large pull unattended. Should
    there be a row/byte limit or a cluster policy cap?
-3. **Copies are static.** A copy never refreshes unless someone re-runs with
+5. **Copies are static.** A copy never refreshes unless someone re-runs with
    `refresh=yes`. Who owns staleness, and should the tags drive a monitor?
-4. **Requester-only grants.** Copies are shared objects but granted to one
-   person. Is group-based granting needed, and who de-provisions on leavers?
-5. **Audit rows are per-attempt.** Accept and dedupe downstream, or disable
+6. **Requester-only grants, and no revocation path.** Copies are shared
+   objects but granted to one person. Is group-based granting needed? And
+   since the probe authorizes at copy time only (§3.1), what happens when
+   someone's source entitlement is revoked — does anything walk back the
+   Unity Catalog grant, or does the copy outlive the entitlement that
+   justified it? The `acquired_by` tag makes this auditable; nothing acts
+   on it yet.
+7. **Audit rows are per-attempt.** Accept and dedupe downstream, or disable
    job retries? (§4)
-6. **Named-instance SQL Server hosts** skip the preflight. If those are
+8. **Named-instance SQL Server hosts** skip the preflight. If those are
    common, is discovering the port via SQL Browser worth the added
    complexity?
 
@@ -261,16 +318,23 @@ misreports, the classifier backstop alone still delivers the message.
 
 ## 9. Recommended launch sequence
 
-1. Architecture review of §3 (trust model) and §8 (open questions).
-2. Security review of the credential path: envelope + AAD binding, secret
+1. **Decide the adoption policy first** (§8 questions 1–2). Whether this
+   coexists with today's direct pulls or eventually replaces them changes
+   what "launched" means, and it is the difference between closing the
+   governance gap and adding a second path alongside it. Everything below
+   is cheaper than getting this wrong.
+2. Architecture review of §3 (trust model) and the rest of §8.
+3. Security review of the credential path: envelope + AAD binding, secret
    scope, job ACLs, scrubbing.
-3. Complete §7 items 1–7 in a non-production workspace.
-4. End-to-end test per source, including one deliberately blocked SQL Server
+4. Complete §7 items 1–7 in a non-production workspace.
+5. End-to-end test per source, including one deliberately blocked SQL Server
    host to confirm the `go/udapintake` message appears.
-5. Pilot with a small analyst group; watch the audit table for the real
-   failure-status distribution.
-6. Launch with a documented intake path for users whose source is not yet
-   enabled.
+6. Pilot with a small analyst group. Watch two things in the audit table:
+   the real failure-status distribution, and whether pilot users actually
+   route through the tool or fall back to their existing habit. The second
+   is the one that decides whether this works.
+7. Launch with a documented intake path for users whose source is not yet
+   enabled, and a plan for the existing copy backlog (§8 question 2).
 
 ---
 
