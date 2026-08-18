@@ -5,7 +5,8 @@ from migration_swamp.status import Status
 def test_status_members():
     assert {s.value for s in Status} == {
         "SUCCEEDED", "AUTH_FAILED", "ASSET_NOT_FOUND",
-        "VOLUME_EXCEEDED", "POLICY_REJECTED", "DRIVER_ERROR",
+        "VOLUME_EXCEEDED", "POLICY_REJECTED", "NETWORK_BLOCKED",
+        "DRIVER_ERROR",
     }
 
 
